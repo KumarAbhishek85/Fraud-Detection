@@ -1,0 +1,167 @@
+---
+title: "Fraudulent Transactions"
+author: "Kumar"
+date: "16/05/2020"
+output: html_document
+---
+
+Import Dataset:
+```{r}
+dataset <- read.csv("https://raw.githubusercontent.com/KumarAbhishek85/Fraud-Detection/master/dataset_1.csv")
+head(dataset)
+```
+Open Libraries:
+```{r}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+```
+Ready Data for Analysis:
+
+
+Dataset is very large and so a subset containing 30% of data set is selected as follows. All balances are rounded off to the nearest ten thousand. 
+```{r}
+i<-createDataPartition(dataset$isFraud, times=1,p=0.3,list=FALSE)
+data<-dataset%>%slice(i)
+data<-data%>%mutate(amount = round(amount/10000)*10000, OO=round(oldbalanceOrg/10000)*10000, OD=round(oldbalanceDest/10000)*10000, NO=round(newbalanceOrig/10000)*10000, ND=round(newbalanceDest/10000)*10000)%>%select(step, type, amount, OO, OD, NO, ND, isFraud, isFlaggedFraud)
+head(data)
+```
+Exploratory Analysis:
+1. Effect of transaction type:
+```{r}
+data%>%group_by(type)%>%summarize(FraudCount=sum(isFraud==1))
+```
+The above implies that only Cash Out and Transfers are associated with fraud.
+
+2. Effect of time:
+```{r}
+data%>% group_by(step, type)%>%summarize(occurrence = mean(isFraud==1))%>%ggplot(aes(step, occurrence, col=type))+geom_point()+stat_ellipse(type="norm")
+```
+Upward tilting ellipses indicate that the probability of occurence of fraud increases with time.
+
+3. Effect of transaction amount:
+```{r}
+data%>% group_by(amount, type)%>%summarize(occurrence = mean(isFraud==1))%>%ggplot(aes(amount, occurrence, col=type))+geom_point()+xlim(0,10000000)
+```
+So higher transaction amount hgher is the chance of fraud, especially for Cash Out transcations.
+
+```{r}
+data%>%group_by(type,amount)%>%summarize(occurrence=mean(isFraud==1))%>%summarize(r=cor(amount, occurrence))
+```
+
+Effect of Pre trasaction origin account balance:
+```{r}
+data%>%filter(type=="CASH_OUT"|type=="TRANSFER")%>%group_by(type,OO)%>%summarize(occurrence = mean(isFraud==1))%>%ggplot(aes(OO,occurrence, col=type))+geom_point()+xlim(0,10000000)
+```
+Higher is the pre transaction balance, higher is the chance of fraud for both cash outs and transfers.
+
+```{r}
+data%>%group_by(type,OO)%>%summarize(occurrence = mean(isFraud==1))%>%summarize(r=cor(OO,occurrence))
+```
+
+4. Effect of post transaction origin account balance:
+```{r}
+data%>%group_by(type,NO)%>%summarize(occurrence = mean(isFraud==1))%>%ggplot(aes(NO,occurrence, col=type))+geom_point()+xlim(0,10000000)
+
+```
+So, higher is post transaction balance of origin account, higher is the chance of fraud for transfers.
+
+5. Effect of Pre transaction destination account balance:
+```{r}
+data%>%group_by(type, OD)%>%summarize(occurrence=mean(isFraud==1))%>%ggplot(aes(OD, occurrence, col=type))+geom_point()+xlim(0,50000000)
+```
+So, higher is the pre transaction destination account balance, higher is the chance of fraud for cash outs.
+
+6. Effect of Post transaction destination account balance:
+
+```{r}
+data%>%group_by(type,ND)%>%summarize(occurrence = mean(isFraud==1))%>%ggplot(aes(ND, occurrence, col=type))+geom_point()+xlim(0,50000000)
+```
+SO, higher the post trasaction estimation account's balance, higher is the chance of fraud.
+
+7. Effect of prior fraud flagging:
+```{r}
+data%>%group_by(type,isFlaggedFraud)%>%summarize(occurrence = mean(isFraud==1))%>%summarize(r=cor(isFlaggedFraud,occurrence))
+```
+No correaltion exists between flagging of fraud and actual presence of fraud.
+
+Checks for multicollinearity:
+
+Accounts with high opening balances should generally also have high closing balances. This should apply to both origin and destination accounts.
+
+```{r}
+data%>%summarize(r1=cor(OO,NO))
+```
+Correlation between opening & closing balances of the origin account is not high enough to indicate multicollinearity. 
+
+```{r}
+data%>%summarize(r1=cor(OD,ND))
+```
+Correlation between opening & closing balances of the destination account is very high indicating multicollinearity. Hence, only "ND" is chosen as a dependent variable in the regression model.
+
+The models:
+
+GLM, KNN and RandomForest algorithms are used for training the model.
+
+Data is spit into training and test sets as follows:
+
+```{r}
+index<-createDataPartition(data$isFraud,times=1,p=0.5,list=FALSE)
+test<-data%>%slice(index)
+train<-data%>%slice(-index)
+```
+
+GLM model is fitted as follows:
+```{r}
+fit_glm<-train(factor(isFraud)~step+amount+OO+NO+type+ND,method="glm", data=train)
+```
+
+```{r}
+y_hat_glm<-predict(fit_glm,test, type="raw")
+```
+
+Now accuracy will be measured as follows:
+```{r}
+accuracy_glm<- mean(y_hat_glm==test$isFraud)
+accuracy_glm
+```
+
+KNN model:
+
+As the dataset has a fairly large size, the default 25-fold cross vaildations is brought down to 10-fold:
+```{r}
+control<- trainControl(method="CV", number=10, p=0.9)
+fit_knn<-train(factor(isFraud)~step+amount+OO+NO+type+ND,method="knn", data=train, trControl=control)
+```
+
+```{r}
+y_hat_knn<-predict(fit_knn,test, type="raw")
+```
+
+Now accuracy will be measured as follows:
+```{r}
+accuracy_knn<- mean(y_hat_knn==test$isFraud)
+accuracy_knn
+```
+
+Random Forest model:
+
+As the dataset has a fairly large size, the default 25-fold cross vaildations is brought down to 5-fold:
+```{r}
+control<- trainControl(method="CV", number=5, p=0.95)
+fit_rf<-train(factor(isFraud)~step+amount+OO+NO+type+ND,method="rf", data=train, trControl=control)
+```
+
+```{r}
+y_hat_rf<-predict(fit_rf,test, type="raw")
+```
+
+Now accuracy will be measured as follows:
+```{r}
+accuracy_rf<- mean(y_hat_rf==test$isFraud)
+accuracy_rf
+```
+
+
+
+
+
